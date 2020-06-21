@@ -8,12 +8,13 @@ const process = require('process');
 use('covid19');
 
 // Configuration
-const countries = ['DE', 'IT', 'ES'];
+const countries = ['US'];
 const colors = ['#F9DB6D', '#00D9C0', '#C33C54'];
 const from = new Date('2020-06-01');
 const outputFile = path.join(process.cwd(), 'out', `covid-data-${countries.join('-')}.json5`);
 
 
+// Get COVID-19 cases from a certain date for a specific country
 function dailyCases(from, country) {
     const match = {
         $match: {
@@ -33,6 +34,10 @@ function dailyCases(from, country) {
     return db.countries_summary.aggregate([match, sort]);
 }
 
+// Normally, I'd simply `map()` the countries array
+// However, there is a limitation in the MongoDB shell in that
+// it's not possible to run async Shell API calls within the mapping function.
+// For this reason, I am falling back to an old school `for` loop.
 const results = [];
 for (let i = 0; i < countries.length; i++) {
     const country = countries[i];
@@ -42,18 +47,32 @@ for (let i = 0; i < countries.length; i++) {
     });
 }
 
+// Now I am going to do loop the arrays and add the difference in
+// # of cases from the previous days
+const augmentedResults = results.map(({country, data}) => {
+    return {
+        country,
+        data: data.map((document, index, array) => {
+            return {
+                ...document,
+                newCases: index === 0 ? 0 : document.confirmed - array[index - 1].confirmed
+            };
+        })
+    }
+});
+
 const output =
 `
 {
     type: 'line',
     data: {
-        labels: [${results[0].data.map(d => `'${d.date.getFullYear()}/${d.date.getMonth() + 1}/${d.date.getDate()}'`).join(',')}],
+        labels: [${augmentedResults[0].data.map(d => `'${d.date.getFullYear()}/${d.date.getMonth() + 1}/${d.date.getDate()}'`).join(',')}],
         datasets: [
-            ${results.map(({country, data}, index) => {
+            ${augmentedResults.map(({country, data}, index) => {
                 return `
                 {
                     label: '# of Cases in ${country}',
-                    data: [${data.map(d => d.confirmed).join(',')}],
+                    data: [${data.map(d => d.newCases).join(',')}],
                     fill: ${index === 0 ? `'origin'` : `'-1'`},
                     borderColor: '${colors[index]}',
                     backgroundColor: '${colors[index]}33',
